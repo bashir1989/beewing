@@ -1,0 +1,84 @@
+665 images, per class: [247, 130, 288], colonies: 72
+train:  431 images, per class [156, 90, 185], colonies 46
+val  :  105 images, per class [40, 19, 46], colonies 11
+test :  129 images, per class [51, 21, 57], colonies 15
+loading images ...
+epoch   1  train loss 1.049 acc 0.494 | val loss 1.644 acc 0.381
+epoch   2  train loss 1.022 acc 0.541 | val loss 2.136 acc 0.381
+epoch   3  train loss 0.950 acc 0.575 | val loss 0.615 acc 0.819
+epoch   4  train loss 0.926 acc 0.599 | val loss 1.056 acc 0.524
+epoch   5  train loss 0.823 acc 0.677 | val loss 1.605 acc 0.438
+epoch   6  train loss 0.848 acc 0.657 | val loss 1.242 acc 0.448
+epoch   7  train loss 0.793 acc 0.689 | val loss 1.290 acc 0.705
+epoch   8  train loss 0.797 acc 0.684 | val loss 1.791 acc 0.448
+epoch   9  train loss 0.815 acc 0.647 | val loss 2.618 acc 0.438
+epoch  10  train loss 0.795 acc 0.687 | val loss 3.309 acc 0.333
+epoch  11  train loss 0.765 acc 0.694 | val loss 5.684 acc 0.438
+epoch  12  train loss 0.724 acc 0.738 | val loss 4.439 acc 0.238
+epoch  13  train loss 0.775 acc 0.698 | val loss 1.124 acc 0.486
+epoch  14  train loss 0.663 acc 0.761 | val loss 2.755 acc 0.448
+epoch  15  train loss 0.635 acc 0.761 | val loss 2.341 acc 0.190
+epoch  16  train loss 0.678 acc 0.763 | val loss 1.594 acc 0.562
+epoch  17  train loss 0.644 acc 0.787 | val loss 3.095 acc 0.400
+epoch  18  train loss 0.605 acc 0.819 | val loss 0.739 acc 0.781
+epoch  19  train loss 0.597 acc 0.819 | val loss 1.265 acc 0.724
+epoch  20  train loss 0.632 acc 0.777 | val loss 2.368 acc 0.400
+epoch  21  train loss 0.553 acc 0.838 | val loss 1.322 acc 0.486
+epoch  22  train loss 0.638 acc 0.798 | val loss 1.144 acc 0.705
+epoch  23  train loss 0.593 acc 0.800 | val loss 1.310 acc 0.590
+epoch  24  train loss 0.493 acc 0.856 | val loss 3.176 acc 0.438
+epoch  25  train loss 0.468 acc 0.875 | val loss 1.616 acc 0.476
+epoch  26  train loss 0.467 acc 0.877 | val loss 0.801 acc 0.600
+epoch  27  train loss 0.422 acc 0.896 | val loss 0.586 acc 0.810
+epoch  28  train loss 0.415 acc 0.882 | val loss 0.646 acc 0.800
+epoch  29  train loss 0.466 acc 0.868 | val loss 1.588 acc 0.648
+epoch  30  train loss 0.465 acc 0.875 | val loss 1.928 acc 0.429
+epoch  31  train loss 0.408 acc 0.900 | val loss 2.847 acc 0.438
+epoch  32  train loss 0.342 acc 0.942 | val loss 1.476 acc 0.533
+epoch  33  train loss 0.346 acc 0.942 | val loss 0.977 acc 0.629
+epoch  34  train loss 0.326 acc 0.949 | val loss 0.639 acc 0.686
+epoch  35  train loss 0.318 acc 0.951 | val loss 0.526 acc 0.838
+epoch  36  train loss 0.321 acc 0.944 | val loss 1.351 acc 0.629
+epoch  37  train loss 0.318 acc 0.949 | val loss 0.279 acc 0.895
+epoch  38  train loss 0.300 acc 0.961 | val loss 0.688 acc 0.695
+epoch  39  train loss 0.274 acc 0.979 | val loss 0.435 acc 0.838
+epoch  40  train loss 0.263 acc 0.979 | val loss 0.547 acc 0.771
+epoch  41  train loss 0.269 acc 0.984 | val loss 1.165 acc 0.581
+epoch  42  train loss 0.256 acc 0.981 | val loss 0.170 acc 0.933
+epoch  43  train loss 0.246 acc 0.988 | val loss 0.472 acc 0.800
+epoch  44  train loss 0.246 acc 0.991 | val loss 0.279 acc 0.886
+epoch  45  train loss 0.249 acc 0.984 | val loss 0.171 acc 0.952
+epoch  46  train loss 0.243 acc 0.991 | val loss 0.268 acc 0.914
+epoch  47  train loss 0.231 acc 0.998 | val loss 0.220 acc 0.943
+epoch  48  train loss 0.236 acc 0.995 | val loss 0.169 acc 0.943
+epoch  49  train loss 0.237 acc 0.993 | val loss 0.202 acc 0.971
+epoch  50  train loss 0.225 acc 1.000 | val loss 0.148 acc 0.971
+epoch  51  train loss 0.224 acc 1.000 | val loss 0.123 acc 0.952
+epoch  52  train loss 0.224 acc 0.998 | val loss 0.144 acc 0.962
+epoch  53  train loss 0.221 acc 0.998 | val loss 0.161 acc 0.962
+epoch  54  train loss 0.219 acc 1.000 | val loss 0.138 acc 0.971
+epoch  55  train loss 0.223 acc 1.000 | val loss 0.149 acc 0.971
+epoch  56  train loss 0.228 acc 0.995 | val loss 0.148 acc 0.971
+epoch  57  train loss 0.221 acc 0.998 | val loss 0.150 acc 0.962
+epoch  58  train loss 0.217 acc 1.000 | val loss 0.154 acc 0.962
+epoch  59  train loss 0.223 acc 1.000 | val loss 0.138 acc 0.971
+epoch  60  train loss 0.227 acc 1.000 | val loss 0.143 acc 0.971
+Test accuracy (per wing): 0.938
+Test accuracy (per colony, majority vote): 1.000 (15 colonies)
+Best val acc: 0.971
+
+              precision    recall  f1-score   support
+
+   C Lineage      0.943     0.980     0.962        51
+   M Lineage      0.947     0.857     0.900        21
+   O Lineage      0.930     0.930     0.930        57
+
+    accuracy                          0.938       129
+   macro avg      0.940     0.922     0.930       129
+weighted avg      0.938     0.938     0.938       129
+
+Confusion matrix (rows=true, cols=pred, order C,M,O):
+[[50  0  1]
+ [ 0 18  3]
+ [ 3  1 53]]
+
