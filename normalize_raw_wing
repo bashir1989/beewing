@@ -1,0 +1,368 @@
+"""Wing segmentation + orientation/size normalization for bee forewing images.
+
+For every image in the input folder (sub-folders included) the main wing is cut
+out of the background and placed on a fixed white canvas so that every wing has
+the same orientation and the same length:
+
+  * base (wing hinge) on the LEFT, tip on the RIGHT
+  * costal (leading, thick-vein) margin on TOP
+    (so right wings are mirrored to look like left wings, the usual practice
+    in wing morphometrics)
+  * wing length along its principal axis = TARGET_LEN pixels
+  * canvas = CANVAS_W x CANVAS_H pixels
+
+The output folder mirrors the input folder one-to-one, with the same file names
+and formats. A file `transforms.json` in the output folder stores, per image,
+the rotation, scale, flips and the 2x3 affine matrix that maps original pixel
+coordinates to normalized ones, so landmarks taken on either image can be
+converted to the other.
+
+Segmentation
+  1. Edge analysis (OpenCV): the membrane is almost background-coloured, but
+     the veins and the outer margin give clear edges. Closed outlines are
+     filled and the wide "core" of each wing-like blob gives prompt points.
+  2. MobileSAM (Segment Anything) is prompted with those points (then with the
+     box of its first answer) and returns one mask per candidate.
+  3. The candidate that looks most like a complete wing (size, convexity,
+     elongation, not cut by the image frame, near the image centre) is kept.
+  If SAM finds nothing, the filled edge outline nearest the centre is used.
+
+Requirements:  pip install opencv-python numpy ultralytics
+(ultralytics installs PyTorch; the MobileSAM weights `mobile_sam.pt`, ~40 MB,
+are downloaded automatically on first use.)
+
+Usage:
+  python wing_pipeline.py INPUT_DIR OUTPUT_DIR [--workers 4] [--weights mobile_sam.pt]
+  python wing_pipeline.py one_image.bmp OUTPUT_DIR          # a single image
+"""
+import argparse
+import json
+import multiprocessing
+import os
+import sys
+from concurrent.futures import ProcessPoolExecutor
+
+# one thread per worker process; parallelism comes from --workers
+for _v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+    os.environ.setdefault(_v, "1")
+
+import cv2
+import numpy as np
+
+cv2.setNumThreads(1)
+
+CANVAS_W, CANVAS_H = 1000, 450
+TARGET_LEN = 900  # wing length (px) after normalization
+IMAGE_EXT = (".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff")
+
+
+# ---------------------------------------------------------------- helpers ---
+
+def fill_holes(m):
+    # pad so the flood fill always starts from background
+    p = cv2.copyMakeBorder(m, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    ff = p.copy()
+    cv2.floodFill(ff, np.zeros((p.shape[0] + 2, p.shape[1] + 2), np.uint8), (0, 0), 255)
+    return (p | cv2.bitwise_not(ff))[1:-1, 1:-1]
+
+
+def largest(mask):
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(mask)
+    if n < 2:
+        return mask
+    return np.where(lab == 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA]), 255, 0).astype(np.uint8)
+
+
+def solidity(r):
+    return (r > 0).sum() / max(cv2.contourArea(cv2.convexHull(cv2.findNonZero(r))), 1)
+
+
+def disk(d):
+    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (d, d))
+
+
+# ---------------------------------------------------------- edge analysis ---
+
+def edge_map(img):
+    g = cv2.cvtColor(cv2.GaussianBlur(img, (0, 0), 2), cv2.COLOR_BGR2GRAY).astype(np.float32)
+    mag = cv2.GaussianBlur(np.hypot(cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1)), (0, 0), 1.5)
+    # the image frame and long straight slide/stripe edges are not wing edges
+    mag[:6, :] = mag[-6:, :] = 0
+    mag[:, :6] = mag[:, -6:] = 0
+    med = np.median(mag)
+    strong = mag > med * 4
+    h, w = mag.shape
+    cols = strong.sum(0) > 0.7 * h
+    rows = strong.sum(1) > 0.85 * w
+    mag[:, cv2.dilate(cols.astype(np.uint8)[None], np.ones((1, 9), np.uint8))[0] > 0] = 0
+    mag[cv2.dilate(rows.astype(np.uint8)[:, None], np.ones((9, 1), np.uint8))[:, 0] > 0, :] = 0
+    return mag, med
+
+
+def hysteresis(mag, lo_t, hi_t, min_area=150):
+    n, lab, stats, _ = cv2.connectedComponentsWithStats((mag > lo_t).astype(np.uint8))
+    keep = np.zeros(n, bool)
+    keep[np.unique(lab[mag > hi_t])] = True
+    keep[0] = False
+    keep &= stats[:, cv2.CC_STAT_AREA] > min_area
+    e = keep[lab].astype(np.uint8) * 255
+    return cv2.morphologyEx(e, cv2.MORPH_CLOSE, disk(5))
+
+
+def filled_outlines(img):
+    """(mask of all closed wing outlines, vein/edge map)."""
+    mag, med = edge_map(img)
+    e = hysteresis(mag, med * 1.8, med * 4)
+    return cv2.morphologyEx(fill_holes(e), cv2.MORPH_OPEN, disk(15)), hysteresis(mag, med * 2.2, med * 4)
+
+
+def candidate_points(img, m):
+    """One group of prompt points per wing-like blob, spread along its core."""
+    dist = cv2.distanceTransform(m, cv2.DIST_L2, 5)
+    lm = cv2.dilate(dist, disk(151))
+    core = ((dist > 15) & (dist >= 0.7 * lm)).astype(np.uint8)
+    n, lab = cv2.connectedComponents(core)
+    groups = []
+    for i in range(1, n):
+        ys, xs = np.nonzero(lab == i)
+        if dist[ys, xs].max() < 20:
+            continue
+        pts = np.column_stack([xs, ys])
+        chosen = [pts[np.argmax(dist[ys, xs])]]  # widest point first
+        for _ in range(3):  # farthest-point sampling
+            d = np.min([np.hypot(*(pts - c).T) for c in chosen], axis=0)
+            if d.max() < 30:
+                break
+            chosen.append(pts[np.argmax(d)])
+        groups.append(np.array(chosen))
+    h, w = m.shape
+    if m[h // 2, w // 2]:  # the image centre, when it lies on a wing
+        groups.append(np.array([[w // 2, h // 2]]))
+    return groups
+
+
+def wingness(mask, veins):
+    """How much a mask looks like the complete main wing (0 = not at all)."""
+    h, w = mask.shape
+    area = (mask > 0).sum() / (h * w)
+    if area < 0.05 or area > 0.4:
+        return 0
+    (cx, cy), (rw, rh), _ = cv2.minAreaRect(cv2.findNonZero(mask))
+    elong = max(rw, rh) / max(min(rw, rh), 1)
+    if elong < 1.8:
+        return 0
+    b = mask > 0
+    touch = int(b[:3].any(0).sum() + b[-3:].any(0).sum() + b[:, :3].any(1).sum() + b[:, -3:].any(1).sum())
+    d = np.hypot(cx - w / 2, cy - h / 2) / (0.25 * w)
+    # a wing is full of veins, a patch of background is not
+    inner = cv2.erode(mask, disk(15)) > 0
+    if not inner.any():
+        return 0
+    vein = min(1.0, (veins[inner] > 0).mean() / 0.25)
+    # a whole forewing (with its narrow base) is about 3x longer than wide;
+    # the broad distal part alone is stubbier
+    elong_f = min(elong / 3.0, 1.0) ** 2
+    return area * solidity(mask) ** 5 * vein ** 2 * elong_f / (1 + touch / 40) / (1 + d ** 2)
+
+
+# ------------------------------------------------------------ segmentation ---
+
+_predictor = None
+
+
+def sam_predictor(weights):
+    global _predictor
+    if _predictor is None:
+        import torch
+        from ultralytics.models.sam import Predictor
+        torch.set_num_threads(1)
+        try:
+            torch.set_num_interop_threads(1)
+        except RuntimeError:
+            pass
+        _predictor = Predictor(overrides=dict(conf=0.25, task="segment", mode="predict", imgsz=1024,
+                                              model=weights, save=False, verbose=False))
+    return _predictor
+
+
+def _ask(p, **prompt):
+    r = p(**prompt)[0].masks
+    if r is None or len(r.data) == 0:
+        return None
+    m = (r.data[0].cpu().numpy() > 0).astype(np.uint8) * 255
+    # cut thin leaks along a touching wing's margin
+    return largest(cv2.morphologyEx(m, cv2.MORPH_OPEN, disk(11)))
+
+
+def segment(img, weights="mobile_sam.pt"):
+    """Return (mask of the main wing, method name)."""
+    m, veins = filled_outlines(img)
+    score = lambda mk: wingness(mk, veins)
+    groups = candidate_points(img, m)
+    # each blob as a whole, and each of its points alone (a blob can span two
+    # touching wings); each also with the points of the other blobs as
+    # negative prompts, so SAM does not spill into a neighbouring wing. The
+    # best-scoring answer wins.
+    prompts = []
+    for gi, pts in enumerate(groups):
+        others = [q for gj, g in enumerate(groups) if gj != gi for q in g.tolist()]
+        for pos in [pts] + ([pts[i:i + 1] for i in range(len(pts))] if len(pts) > 1 else []):
+            neg = [q for q in others if min(np.hypot(*(pos - q).T)) > 40]
+            prompts.append(([pos.tolist()], [[1] * len(pos)]))
+            if neg:
+                prompts.append(([pos.tolist() + neg], [[1] * len(pos) + [0] * len(neg)]))
+    p = sam_predictor(weights)
+    p.set_image(img)
+    best, best_s = None, 0
+    for P, L in prompts:
+        mask = _ask(p, points=P, labels=L)
+        if mask is None or (mask > 0).sum() < 100:
+            continue
+        x, y, bw, bh = cv2.boundingRect(mask)  # refine with the box of the first answer
+        mask2 = _ask(p, bboxes=[[x, y, x + bw, y + bh]], points=P, labels=L)
+        if mask2 is not None and score(mask2) >= score(mask):
+            mask = mask2
+        s = score(mask)
+        if s > best_s:
+            best, best_s = fill_holes(mask), s
+    p.reset_image()
+    if best is not None:
+        return best, "sam"
+
+    # fallback: the filled outline that looks most like the main wing
+    n, lab = cv2.connectedComponents(m)
+    regions = [np.where(lab == i, 255, 0).astype(np.uint8) for i in range(1, n)]
+    regions = [r for r in regions if score(r) > 0] or regions
+    if not regions:
+        raise RuntimeError("no wing found")
+    r = max(regions, key=lambda r: (score(r), (r > 0).sum()))
+    return fill_holes(cv2.morphologyEx(r, cv2.MORPH_CLOSE, disk(25))), "edges"
+
+
+# ----------------------------------------------------------- normalization ---
+
+def normalize(img, mask):
+    ys, xs = np.nonzero(mask)
+    pts = np.column_stack([xs, ys]).astype(np.float64)
+    c = pts.mean(0)
+    evals, evecs = np.linalg.eigh(np.cov((pts - c).T))
+    axis = evecs[:, np.argmax(evals)]
+    angle = np.degrees(np.arctan2(axis[1], axis[0]))
+
+    def warp(a, s, flip_x, flip_y, interp, border):
+        M = cv2.getRotationMatrix2D(tuple(c), angle, s)
+        M[:, 2] += [CANVAS_W / 2 - c[0], CANVAS_H / 2 - c[1]]
+        if flip_x:
+            M[0] = -M[0]; M[0, 2] += CANVAS_W
+        if flip_y:
+            M[1] = -M[1]; M[1, 2] += CANVAS_H
+        return cv2.warpAffine(a, M, (CANVAS_W, CANVAS_H), flags=interp, borderValue=border), M
+
+    # rotate only (scale 1) to measure the length and decide the flips
+    rm, _ = warp(mask, 1.0, False, False, cv2.INTER_NEAREST, 0)
+    ys, xs = np.nonzero(rm)
+    length = xs.max() - xs.min() + 1
+    height = np.array([(rm[:, x] > 0).sum() for x in range(xs.min(), xs.max() + 1)])
+    third = len(height) // 3
+    flip_x = height[:third].mean() > height[-third:].mean()  # narrow base -> left
+
+    # the costal margin carries a thick dark vein along its whole length, the
+    # trailing margin does not: put the darker margin band on top
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    rg, _ = warp(gray, 1.0, flip_x, False, cv2.INTER_LINEAR, 255)
+    rm2, _ = warp(mask, 1.0, flip_x, False, cv2.INTER_NEAREST, 0)
+    xs2 = np.nonzero(rm2)[1]
+    x0, x1 = xs2.min(), xs2.max()
+    top_dark, bot_dark = [], []
+    for x in range(int(x0 + 0.25 * (x1 - x0)), int(x0 + 0.75 * (x1 - x0))):
+        col = np.nonzero(rm2[:, x])[0]
+        if len(col) < 30:
+            continue
+        top_dark.append(rg[col[0] + 2:col[0] + 14, x].min())
+        bot_dark.append(rg[col[-1] - 13:col[-1] - 1, x].min())
+    flip_y = bool(top_dark) and np.mean(bot_dark) < np.mean(top_dark)
+
+    s = TARGET_LEN / length
+    out_img, M = warp(img, s, flip_x, flip_y, cv2.INTER_CUBIC, (255, 255, 255))
+    out_mask, _ = warp(mask, s, flip_x, flip_y, cv2.INTER_NEAREST, 0)
+    cut = out_img.copy()
+    cut[out_mask == 0] = 255
+    info = dict(rotation_deg=float(angle), scale=float(s), flip_x=bool(flip_x), flip_y=bool(flip_y),
+                wing_length_px_original=int(length), affine_matrix=M.tolist())
+    return cut, out_mask, info
+
+
+# ------------------------------------------------------------------ driver ---
+
+def process(args):
+    src, dst, weights = args
+    try:
+        img = cv2.imread(src)
+        if img is None:
+            raise RuntimeError("cannot read image")
+        mask, method = segment(img, weights)
+        cut, _, info = normalize(img, mask)
+        os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+        params = [cv2.IMWRITE_JPEG_QUALITY, 95] if dst.lower().endswith((".jpg", ".jpeg")) else []
+        if not cv2.imwrite(dst, cut, params):
+            raise RuntimeError("cannot write output")
+        return src, dict(ok=True, method=method, **info)
+    except Exception as e:
+        return src, dict(ok=False, error=repr(e))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("input", help="image file or folder (searched recursively)")
+    ap.add_argument("output", help="output folder (mirrors the input folder)")
+    ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
+    ap.add_argument("--weights", default="mobile_sam.pt", help="MobileSAM weights (downloaded if missing)")
+    a = ap.parse_args()
+
+    out_root = os.path.abspath(a.output)
+    if os.path.isfile(a.input):
+        jobs = [(a.input, os.path.join(out_root, os.path.basename(a.input)), a.weights)]
+        base = os.path.dirname(os.path.abspath(a.input))
+    else:
+        base = os.path.abspath(a.input)
+        jobs = []
+        for root, dirs, files in os.walk(base):
+            dirs[:] = sorted(d for d in dirs if os.path.abspath(os.path.join(root, d)) != out_root)
+            for f in sorted(files):
+                if f.lower().endswith(IMAGE_EXT):
+                    src = os.path.join(root, f)
+                    jobs.append((src, os.path.join(out_root, os.path.relpath(src, base)), a.weights))
+    if not jobs:
+        sys.exit("no images found")
+
+    # progress file: an interrupted run continues where it stopped
+    os.makedirs(out_root, exist_ok=True)
+    progress = os.path.join(out_root, "progress.jsonl")
+    results = {}
+    if os.path.exists(progress):
+        with open(progress) as f:
+            for line in f:
+                rel, r = json.loads(line)
+                if r["ok"]:
+                    results[rel] = r
+    todo = [j for j in jobs if os.path.relpath(j[0], base) not in results]
+    print(f"{len(jobs)} images, {len(jobs) - len(todo)} already done", flush=True)
+    ctx = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(a.workers, mp_context=ctx) as ex, open(progress, "a") as log:
+        for k, (src, r) in enumerate(ex.map(process, todo), 1):
+            rel = os.path.relpath(src, base)
+            results[rel] = r
+            log.write(json.dumps([rel, r]) + "\n")
+            log.flush()
+            print(f"[{k}/{len(todo)}] {rel}: {r['method'] if r['ok'] else 'FAILED ' + r['error']}", flush=True)
+
+    with open(os.path.join(out_root, "transforms.json"), "w") as f:
+        json.dump(dict(canvas=[CANVAS_W, CANVAS_H], target_length_px=TARGET_LEN, images=results), f, indent=1)
+    bad = [k for k, r in results.items() if not r["ok"]]
+    if not bad:
+        os.remove(progress)
+    print(f"done: {len(results) - len(bad)} ok, {len(bad)} failed")
+
+
+if __name__ == "__main__":
+    main()
