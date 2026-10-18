@@ -1,0 +1,18 @@
+Test accuracy (per wing): 0.938
+Test accuracy (per colony, majority vote): 1.000 (15 colonies)
+Best val acc: 0.981
+
+              precision    recall  f1-score   support
+
+   C Lineage      0.925     0.961     0.942        51
+   M Lineage      0.905     0.905     0.905        21
+   O Lineage      0.964     0.930     0.946        57
+
+    accuracy                          0.938       129
+   macro avg      0.931     0.932     0.931       129
+weighted avg      0.939     0.938     0.938       129
+
+Confusion matrix (rows=true, cols=pred, order C,M,O):
+[[49  0  2]
+ [ 2 19  0]
+ [ 2  2 53]]

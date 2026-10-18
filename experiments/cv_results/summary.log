@@ -1,0 +1,10 @@
+CNN (from scratch)                 folds=5 acc=0.917±0.042 F1=0.912±0.040 colonies 69/72 recall C/M/O=[0.931, 0.869, 0.927] per-fold acc=[0.938, 0.917, 0.962, 0.85, 0.92] wrong=[[], [np.str_('1_390')], [], [np.str_('0_204'), np.str_('2_754')], []]
+ResNet18 (ImageNet, fine-tuned)    folds=5 acc=0.929±0.041 F1=0.919±0.044 colonies 71/72 recall C/M/O=[0.968, 0.831, 0.941] per-fold acc=[0.938, 0.985, 0.94, 0.872, 0.912] wrong=[[], [], [np.str_('1_563')], [], []]
+PCA + LDA (pixels)                 folds=5 acc=0.902±0.019 F1=0.889±0.017 colonies 72/72 recall C/M/O=[0.927, 0.808, 0.924] per-fold acc=[0.899, 0.895, 0.932, 0.88, 0.905] wrong=[[], [], [], [], []]
+HOG + SVM                          folds=5 acc=0.884±0.024 F1=0.865±0.033 colonies 70/72 recall C/M/O=[0.919, 0.685, 0.944] per-fold acc=[0.907, 0.872, 0.865, 0.865, 0.912] wrong=[[], [], [np.str_('1_1448')], [np.str_('1_562')], []]
+McNemar CNN (from scratch) vs ResNet18 (ImageNet, fine-tuned): only-first 25, only-second 33, p=0.3581
+McNemar CNN (from scratch) vs PCA + LDA (pixels): only-first 43, only-second 33, p=0.3019
+McNemar CNN (from scratch) vs HOG + SVM: only-first 59, only-second 37, p=0.0315
+McNemar ResNet18 (ImageNet, fine-tuned) vs PCA + LDA (pixels): only-first 47, only-second 29, p=0.0505
+McNemar ResNet18 (ImageNet, fine-tuned) vs HOG + SVM: only-first 56, only-second 26, p=0.0012
+McNemar PCA + LDA (pixels) vs HOG + SVM: only-first 48, only-second 36, p=0.2299
